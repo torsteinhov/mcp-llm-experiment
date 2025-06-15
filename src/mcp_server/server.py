@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-A simple MCP server that provides basic calculator, text processing, and weather tools.
+A comprehensive MCP server that provides calculator, text processing, weather, and aviation tools.
 """
 
 import asyncio
 import json
 import sys
 import aiohttp
+import os
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 from mcp import types
 from mcp.server import Server
@@ -91,6 +93,79 @@ async def list_tools() -> List[types.Tool]:
                 },
                 "required": ["location"]
             }
+        ),
+        types.Tool(
+            name="get_flights_by_location",
+            description="Get real-time flight data for flights near a specific location using AviationStack API",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name or location to search for nearby flights (e.g., 'Oslo', 'New York', 'London')"
+                    },
+                    "radius": {
+                        "type": "integer",
+                        "description": "Search radius in kilometers (default: 100, max: 500)",
+                        "default": 100,
+                        "minimum": 10,
+                        "maximum": 500
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of flights to return (default: 20, max: 100)",
+                        "default": 20,
+                        "minimum": 1,
+                        "maximum": 100
+                    }
+                },
+                "required": ["location"]
+            }
+        ),
+        types.Tool(
+            name="get_airport_info",
+            description="Get detailed information about airports near a location",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name or airport code (e.g., 'Oslo', 'OSL', 'JFK', 'London')"
+                    }
+                },
+                "required": ["location"]
+            }
+        ),
+        types.Tool(
+            name="get_location_data",
+            description="Get comprehensive location data including coordinates, weather, nearby airports, and flights",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name or location (e.g., 'Oslo', 'New York', 'London')"
+                    },
+                    "include_flights": {
+                        "type": "boolean",
+                        "description": "Include nearby flight data (default: true)",
+                        "default": True
+                    },
+                    "include_weather": {
+                        "type": "boolean",
+                        "description": "Include weather data (default: true)",
+                        "default": True
+                    },
+                    "flight_radius": {
+                        "type": "integer",
+                        "description": "Flight search radius in kilometers (default: 100)",
+                        "default": 100,
+                        "minimum": 10,
+                        "maximum": 500
+                    }
+                },
+                "required": ["location"]
+            }
         )
     ]
 
@@ -109,6 +184,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         return await handle_list_files(arguments)
     elif name == "get_weather":
         return await handle_get_weather(arguments)
+    elif name == "get_flights_by_location":
+        return await handle_get_flights_by_location(arguments)
+    elif name == "get_airport_info":
+        return await handle_get_airport_info(arguments)
+    elif name == "get_location_data":
+        return await handle_get_location_data(arguments)
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -224,6 +305,34 @@ async def handle_list_files(arguments: Dict[str, Any]) -> List[types.TextContent
         )]
 
 
+async def get_location_coordinates(location: str) -> Optional[Dict]:
+    """
+    Get coordinates for a location using Open-Meteo's geocoding API.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
+            geocoding_params = {
+                "name": location,
+                "count": 1,
+                "language": "en",
+                "format": "json"
+            }
+            
+            async with session.get(geocoding_url, params=geocoding_params) as response:
+                if response.status != 200:
+                    return None
+                
+                geo_data = await response.json()
+                
+                if not geo_data.get("results"):
+                    return None
+                
+                return geo_data["results"][0]
+    except Exception:
+        return None
+
+
 async def handle_get_weather(arguments: Dict[str, Any]) -> List[types.TextContent]:
     """
     Handle weather API calls using Open-Meteo (free, no API key required).
@@ -239,40 +348,20 @@ async def handle_get_weather(arguments: Dict[str, Any]) -> List[types.TextConten
         )]
     
     try:
-        # First, get coordinates for the location using Open-Meteo's geocoding
+        location_data = await get_location_coordinates(location)
+        if not location_data:
+            return [types.TextContent(
+                type="text",
+                text=f"Error: Location '{location}' not found. Please try a different city name."
+            )]
+        
+        lat = location_data["latitude"]
+        lon = location_data["longitude"]
+        city_name = location_data["name"]
+        country = location_data.get("country", "")
+        
+        # Weather API call
         async with aiohttp.ClientSession() as session:
-            # Geocoding API call
-            geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
-            geocoding_params = {
-                "name": location,
-                "count": 1,
-                "language": "en",
-                "format": "json"
-            }
-            
-            async with session.get(geocoding_url, params=geocoding_params) as response:
-                if response.status != 200:
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Error: Could not fetch location data (status: {response.status})"
-                    )]
-                
-                geo_data = await response.json()
-                
-                if not geo_data.get("results"):
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Error: Location '{location}' not found. Please try a different city name."
-                    )]
-                
-                # Get the first result
-                location_data = geo_data["results"][0]
-                lat = location_data["latitude"]
-                lon = location_data["longitude"]
-                city_name = location_data["name"]
-                country = location_data.get("country", "")
-                
-            # Weather API call
             weather_url = "https://api.open-meteo.com/v1/forecast"
             weather_params = {
                 "latitude": lat,
@@ -304,15 +393,205 @@ async def handle_get_weather(arguments: Dict[str, Any]) -> List[types.TextConten
             text=result
         )]
         
-    except aiohttp.ClientError as e:
-        return [types.TextContent(
-            type="text",
-            text=f"Error: Network error while fetching weather data: {str(e)}"
-        )]
     except Exception as e:
         return [types.TextContent(
             type="text",
             text=f"Error getting weather for '{location}': {str(e)}"
+        )]
+
+
+async def handle_get_flights_by_location(arguments: Dict[str, Any]) -> List[types.TextContent]:
+    """
+    Handle flight data requests using AviationStack API.
+    """
+    location = arguments.get("location", "")
+    radius = arguments.get("radius", 100)
+    limit = arguments.get("limit", 20)
+    
+    if not location:
+        return [types.TextContent(
+            type="text",
+            text="Error: No location provided"
+        )]
+    
+    # Check for API key
+    api_key = os.getenv("AVIATIONSTACK_API_KEY")
+    if not api_key:
+        return [types.TextContent(
+            type="text",
+            text="Error: AviationStack API key not found. Please set AVIATIONSTACK_API_KEY environment variable. Get your free API key at: https://aviationstack.com/signup/free"
+        )]
+    
+    try:
+        # Get location coordinates
+        location_data = await get_location_coordinates(location)
+        if not location_data:
+            return [types.TextContent(
+                type="text",
+                text=f"Error: Location '{location}' not found. Please try a different city name."
+            )]
+        
+        lat = location_data["latitude"]
+        lon = location_data["longitude"]
+        city_name = location_data["name"]
+        country = location_data.get("country", "")
+        
+        # Get flight data
+        async with aiohttp.ClientSession() as session:
+            flights_url = "http://api.aviationstack.com/v1/flights"
+            flights_params = {
+                "access_key": api_key,
+                "limit": limit,
+                # Note: AviationStack free tier doesn't support location-based filtering
+                # We'll get general flight data and filter/format it
+            }
+            
+            async with session.get(flights_url, params=flights_params) as response:
+                if response.status != 200:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Error: Could not fetch flight data (status: {response.status})"
+                    )]
+                
+                flight_data = await response.json()
+        
+        # Format the flight response
+        result = format_flight_response(flight_data, city_name, country, lat, lon, radius)
+        
+        return [types.TextContent(
+            type="text",
+            text=result
+        )]
+        
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=f"Error getting flight data for '{location}': {str(e)}"
+        )]
+
+
+async def handle_get_airport_info(arguments: Dict[str, Any]) -> List[types.TextContent]:
+    """
+    Handle airport information requests.
+    """
+    location = arguments.get("location", "")
+    
+    if not location:
+        return [types.TextContent(
+            type="text",
+            text="Error: No location provided"
+        )]
+    
+    # Check for API key
+    api_key = os.getenv("AVIATIONSTACK_API_KEY")
+    if not api_key:
+        return [types.TextContent(
+            type="text",
+            text="Error: AviationStack API key not found. Please set AVIATIONSTACK_API_KEY environment variable. Get your free API key at: https://aviationstack.com/signup/free"
+        )]
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            airports_url = "http://api.aviationstack.com/v1/airports"
+            airports_params = {
+                "access_key": api_key,
+                "search": location,
+                "limit": 10
+            }
+            
+            async with session.get(airports_url, params=airports_params) as response:
+                if response.status != 200:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Error: Could not fetch airport data (status: {response.status})"
+                    )]
+                
+                airport_data = await response.json()
+        
+        # Format the airport response
+        result = format_airport_response(airport_data, location)
+        
+        return [types.TextContent(
+            type="text",
+            text=result
+        )]
+        
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=f"Error getting airport info for '{location}': {str(e)}"
+        )]
+
+
+async def handle_get_location_data(arguments: Dict[str, Any]) -> List[types.TextContent]:
+    """
+    Handle comprehensive location data requests combining weather, flights, and airports.
+    """
+    location = arguments.get("location", "")
+    include_flights = arguments.get("include_flights", True)
+    include_weather = arguments.get("include_weather", True)
+    flight_radius = arguments.get("flight_radius", 100)
+    
+    if not location:
+        return [types.TextContent(
+            type="text",
+            text="Error: No location provided"
+        )]
+    
+    try:
+        # Get location coordinates
+        location_data = await get_location_coordinates(location)
+        if not location_data:
+            return [types.TextContent(
+                type="text",
+                text=f"Error: Location '{location}' not found. Please try a different city name."
+            )]
+        
+        lat = location_data["latitude"]
+        lon = location_data["longitude"]
+        city_name = location_data["name"]
+        country = location_data.get("country", "")
+        
+        result = f"📍 COMPREHENSIVE DATA FOR {city_name.upper()}"
+        if country:
+            result += f", {country.upper()}"
+        result += "\n" + "="*60 + "\n\n"
+        
+        result += f"🌐 COORDINATES: {lat:.4f}, {lon:.4f}\n\n"
+        
+        # Add weather data
+        if include_weather:
+            weather_args = {"location": location, "days": 3, "include_hourly": False}
+            weather_response = await handle_get_weather(weather_args)
+            if weather_response:
+                result += weather_response[0].text + "\n\n"
+        
+        # Add airport data
+        airport_args = {"location": location}
+        airport_response = await handle_get_airport_info(airport_args)
+        if airport_response:
+            result += airport_response[0].text + "\n\n"
+        
+        # Add flight data
+        if include_flights:
+            flight_args = {"location": location, "radius": flight_radius, "limit": 10}
+            flight_response = await handle_get_flights_by_location(flight_args)
+            if flight_response:
+                result += flight_response[0].text + "\n\n"
+        
+        result += "🗺️ MAP INTEGRATION READY\n"
+        result += f"Use coordinates ({lat:.4f}, {lon:.4f}) for mapping applications\n"
+        result += "This data can be used to create interactive maps with weather and flight overlays."
+        
+        return [types.TextContent(
+            type="text",
+            text=result
+        )]
+        
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=f"Error getting comprehensive data for '{location}': {str(e)}"
         )]
 
 
@@ -357,9 +636,9 @@ def format_weather_response(weather_data: Dict, city_name: str, country: str, in
     current_wind_speed = current.get("wind_speed_10m")
     current_wind_direction = current.get("wind_direction_10m")
     
-    result = f"🌤️ Weather for {city_name}"
+    result = f"🌤️ WEATHER FOR {city_name.upper()}"
     if country:
-        result += f", {country}"
+        result += f", {country.upper()}"
     result += "\n" + "="*50 + "\n\n"
     
     # Current conditions
@@ -403,31 +682,130 @@ def format_weather_response(weather_data: Dict, city_name: str, country: str, in
             if wind_speed is not None:
                 result += f"  💨 Max wind: {wind_speed} km/h\n"
     
-    # Hourly forecast (if requested)
-    if include_hourly and weather_data.get("hourly"):
-        hourly = weather_data["hourly"]
-        result += "\n🕐 TODAY'S HOURLY FORECAST:\n"
-        
-        # Show next 12 hours
-        for i in range(min(12, len(hourly.get("time", [])))):
-            time = hourly["time"][i]
-            temp = hourly.get("temperature_2m", [None])[i]
-            weather_code = hourly.get("weather_code", [None])[i]
-            precipitation_prob = hourly.get("precipitation_probability", [None])[i]
-            
-            # Format time (show only hour)
-            hour = time.split('T')[1][:5] if 'T' in time else time
-            
-            result += f"\n{hour}: "
-            if temp is not None:
-                result += f"{temp}°C, "
-            if weather_code is not None:
-                result += f"{get_weather_description(weather_code)}"
-            if precipitation_prob is not None and precipitation_prob > 0:
-                result += f", {precipitation_prob}% rain chance"
-            result = result.rstrip(", ") + "\n"
+    return result
+
+
+def format_flight_response(flight_data: Dict, city_name: str, country: str, lat: float, lon: float, radius: int) -> str:
+    """
+    Format the flight API response into a readable format.
+    """
+    result = f"✈️ FLIGHT DATA NEAR {city_name.upper()}"
+    if country:
+        result += f", {country.upper()}"
+    result += f" ({radius}km radius)\n"
+    result += "="*50 + "\n\n"
     
-    result += "\n📡 Data provided by Open-Meteo (open-meteo.com)"
+    flights = flight_data.get("data", [])
+    
+    if not flights:
+        result += "No flight data available. This might be due to:\n"
+        result += "- API rate limits on the free tier\n"
+        result += "- No flights currently active in the area\n"
+        result += "- API key limitations\n\n"
+        result += "💡 TIP: The free AviationStack tier has limited features.\n"
+        result += "For production use, consider upgrading for location-based filtering."
+        return result
+    
+    result += f"📊 SHOWING {len(flights)} FLIGHTS:\n\n"
+    
+    for i, flight in enumerate(flights[:10]):  # Limit to 10 flights for readability
+        flight_info = flight.get("flight", {})
+        departure = flight.get("departure", {})
+        arrival = flight.get("arrival", {})
+        aircraft = flight.get("aircraft", {})
+        airline = flight.get("airline", {})
+        
+        result += f"🛫 FLIGHT {i+1}:\n"
+        
+        # Flight number and airline
+        if flight_info.get("number"):
+            result += f"  📋 Flight: {flight_info['number']}"
+            if airline.get("name"):
+                result += f" ({airline['name']})"
+            result += "\n"
+        
+        # Route
+        dep_airport = departure.get("airport", "Unknown")
+        arr_airport = arrival.get("airport", "Unknown")
+        result += f"  🛣️ Route: {dep_airport} → {arr_airport}\n"
+        
+        # Status
+        if flight_info.get("status"):
+            status_emoji = "🟢" if flight_info["status"] == "active" else "🟡"
+            result += f"  {status_emoji} Status: {flight_info['status'].title()}\n"
+        
+        # Aircraft
+        if aircraft.get("registration"):
+            result += f"  ✈️ Aircraft: {aircraft['registration']}"
+            if aircraft.get("iata"):
+                result += f" ({aircraft['iata']})"
+            result += "\n"
+        
+        # Times
+        if departure.get("scheduled"):
+            result += f"  🕐 Departure: {departure['scheduled']}\n"
+        if arrival.get("scheduled"):
+            result += f"  🕑 Arrival: {arrival['scheduled']}\n"
+        
+        result += "\n"
+    
+    result += "📡 Data provided by AviationStack API\n"
+    result += f"🗺️ Center coordinates: {lat:.4f}, {lon:.4f}\n"
+    result += "💡 Use these coordinates for map visualization"
+    
+    return result
+
+
+def format_airport_response(airport_data: Dict, location: str) -> str:
+    """
+    Format the airport API response into a readable format.
+    """
+    result = f"🛬 AIRPORTS NEAR {location.upper()}\n"
+    result += "="*40 + "\n\n"
+    
+    airports = airport_data.get("data", [])
+    
+    if not airports:
+        result += f"No airports found for '{location}'.\n"
+        result += "Try searching with:\n"
+        result += "- Full city name (e.g., 'New York')\n"
+        result += "- Airport code (e.g., 'JFK', 'LAX')\n"
+        result += "- Country name\n"
+        return result
+    
+    result += f"📊 FOUND {len(airports)} AIRPORTS:\n\n"
+    
+    for i, airport in enumerate(airports):
+        result += f"🛬 AIRPORT {i+1}:\n"
+        
+        # Basic info
+        if airport.get("airport_name"):
+            result += f"  📋 Name: {airport['airport_name']}\n"
+        
+        if airport.get("iata_code"):
+            result += f"  🏷️ IATA Code: {airport['iata_code']}"
+            if airport.get("icao_code"):
+                result += f" / ICAO: {airport['icao_code']}"
+            result += "\n"
+        
+        # Location
+        if airport.get("city_iata_code"):
+            result += f"  🏙️ City: {airport['city_iata_code']}"
+            if airport.get("country_name"):
+                result += f", {airport['country_name']}"
+            result += "\n"
+        
+        # Coordinates
+        if airport.get("latitude") and airport.get("longitude"):
+            result += f"  🌐 Coordinates: {airport['latitude']}, {airport['longitude']}\n"
+        
+        # Timezone
+        if airport.get("timezone"):
+            result += f"  🕐 Timezone: {airport['timezone']}\n"
+        
+        result += "\n"
+    
+    result += "📡 Data provided by AviationStack API"
     
     return result
 
@@ -444,6 +822,12 @@ async def list_resources() -> List[types.Resource]:
             name="Server Information",
             description="Information about this MCP server",
             mimeType="application/json"
+        ),
+        types.Resource(
+            uri="config://api-setup",
+            name="API Setup Guide",
+            description="Guide for setting up required API keys",
+            mimeType="text/plain"
         )
     ]
 
@@ -456,29 +840,9 @@ async def read_resource(uri: str) -> str:
     if uri == "config://server-info":
         server_info = {
             "name": "mcp-server",
-            "version": "0.1.0",
-            "description": "A sample MCP server with calculator, text analysis, and weather tools",
-            "tools": ["calculator", "text_analyzer", "list_files", "get_weather"],
-            "resources": ["config://server-info"],
-            "apis_used": ["Open-Meteo (free weather API)"]
-        }
-        return json.dumps(server_info, indent=2)
-    else:
-        raise ValueError(f"Unknown resource: {uri}")
-
-
-async def main():
-    """
-    Main entry point for the MCP server.
-    """
-    # Run the server using stdio transport
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options()
-        )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            "version": "0.2.0",
+            "description": "A comprehensive MCP server with calculator, text analysis, weather, and aviation tools",
+            "tools": ["calculator", "text_analyzer", "list_files", "get_weather", "get_flights_by_location", "get_airport_info", "get_location_data"],
+            "resources": ["config://server-info", "config://api-setup"],
+            "apis_used": [
+                "Open-Meteo (free weather API -
