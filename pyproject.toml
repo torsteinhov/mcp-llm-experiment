@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "A sample MCP server"
+authors = [{name = "Torstein Heltne Hovde", email = "torstein.hovde@gmail.com"}]
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+mcp-server = "mcp_server.server:main"
