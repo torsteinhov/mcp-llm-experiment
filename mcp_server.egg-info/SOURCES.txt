@@ -1,5 +1,7 @@
 README.md
 pyproject.toml
+mcp_server/__init__.py
+mcp_server/server.py
 mcp_server.egg-info/PKG-INFO
 mcp_server.egg-info/SOURCES.txt
 mcp_server.egg-info/dependency_links.txt
