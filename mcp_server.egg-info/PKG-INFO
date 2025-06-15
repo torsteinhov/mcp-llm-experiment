@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: mcp-server
+Version: 0.1.0
+Summary: A sample MCP server
+Author-email: Torstein Heltne Hovde <torstein.hovde@gmail.com>
+Requires-Dist: mcp>=1.0.0
