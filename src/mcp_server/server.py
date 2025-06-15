@@ -16,20 +16,39 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-# Load environment variables from .env file
-def load_env_file():
-    """Load environment variables from .env file if it exists."""
-    env_path = Path(__file__).parent.parent.parent / ".env"
-    if env_path.exists():
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip()
+import asyncio
+import json
+import sys
+import aiohttp
+import os
+from typing import Any, Dict, List, Optional
+from datetime import datetime
+from pathlib import Path
 
-# Load .env file at startup
-load_env_file()
+from mcp import types
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    # Look for .env file in the project root (3 levels up from this file)
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    load_dotenv(env_path)
+except ImportError:
+    # Fallback: manual .env loading if python-dotenv is not available
+    def load_env_file():
+        """Load environment variables from .env file if it exists."""
+        env_path = Path(__file__).parent.parent.parent / ".env"
+        if env_path.exists():
+            with open(env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        os.environ[key.strip()] = value.strip()
+    
+    load_env_file()
 
 
 # Initialize the MCP server
@@ -435,7 +454,15 @@ async def handle_get_flights_by_location(arguments: Dict[str, Any]) -> List[type
     if not api_key:
         return [types.TextContent(
             type="text",
-            text="Error: AviationStack API key not found. Please set AVIATIONSTACK_API_KEY environment variable. Get your free API key at: https://aviationstack.com/signup/free"
+            text="""Error: AviationStack API key not found. 
+
+To fix this:
+1. Get your free API key at: https://aviationstack.com/signup/free
+2. Add it to your .env file: AVIATIONSTACK_API_KEY=your_key_here
+3. Restart Claude Desktop
+
+The .env file should be located at:
+C:\\Repositories\\Privat\\mcp-llm-experiment\\.env"""
         )]
     
     try:
@@ -459,17 +486,51 @@ async def handle_get_flights_by_location(arguments: Dict[str, Any]) -> List[type
                 "access_key": api_key,
                 "limit": limit,
                 # Note: AviationStack free tier doesn't support location-based filtering
-                # We'll get general flight data and filter/format it
+                # We'll get general flight data and format it
             }
             
             async with session.get(flights_url, params=flights_params) as response:
+                response_text = await response.text()
+                
+                if response.status == 403:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"""Error: API Access Forbidden (403)
+
+This usually means:
+1. Invalid API key
+2. API key not activated
+3. Free tier limitations exceeded
+
+Your API key: {api_key[:8]}...{api_key[-4:]}
+
+Please:
+1. Check your API key at https://aviationstack.com/dashboard
+2. Ensure you've verified your email
+3. Check if you have remaining requests this month
+4. Try regenerating your API key"""
+                    )]
+                
                 if response.status != 200:
                     return [types.TextContent(
                         type="text",
-                        text=f"Error: Could not fetch flight data (status: {response.status})"
+                        text=f"Error: Could not fetch flight data (status: {response.status})\nResponse: {response_text[:200]}..."
                     )]
                 
-                flight_data = await response.json()
+                try:
+                    flight_data = await response.json()
+                except Exception as json_error:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Error: Invalid JSON response from API\nResponse: {response_text[:200]}...\nError: {str(json_error)}"
+                    )]
+        
+        # Check if we got valid data
+        if not flight_data or not isinstance(flight_data, dict):
+            return [types.TextContent(
+                type="text",
+                text=f"Error: Invalid response format from AviationStack API\nResponse: {str(flight_data)[:200]}..."
+            )]
         
         # Format the flight response
         result = format_flight_response(flight_data, city_name, country, lat, lon, radius)
@@ -479,10 +540,15 @@ async def handle_get_flights_by_location(arguments: Dict[str, Any]) -> List[type
             text=result
         )]
         
+    except aiohttp.ClientError as e:
+        return [types.TextContent(
+            type="text",
+            text=f"Error: Network error while fetching flight data: {str(e)}"
+        )]
     except Exception as e:
         return [types.TextContent(
             type="text",
-            text=f"Error getting flight data for '{location}': {str(e)}"
+            text=f"Error getting flight data for '{location}': {str(e)}\n\nAPI Key status: {'Found' if api_key else 'Missing'}"
         )]
 
 
@@ -503,7 +569,15 @@ async def handle_get_airport_info(arguments: Dict[str, Any]) -> List[types.TextC
     if not api_key:
         return [types.TextContent(
             type="text",
-            text="Error: AviationStack API key not found. Please set AVIATIONSTACK_API_KEY environment variable. Get your free API key at: https://aviationstack.com/signup/free"
+            text="""Error: AviationStack API key not found. 
+
+To fix this:
+1. Get your free API key at: https://aviationstack.com/signup/free
+2. Add it to your .env file: AVIATIONSTACK_API_KEY=your_key_here
+3. Restart Claude Desktop
+
+The .env file should be located at:
+C:\\Repositories\\Privat\\mcp-llm-experiment\\.env"""
         )]
     
     try:
@@ -516,13 +590,47 @@ async def handle_get_airport_info(arguments: Dict[str, Any]) -> List[types.TextC
             }
             
             async with session.get(airports_url, params=airports_params) as response:
+                response_text = await response.text()
+                
+                if response.status == 403:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"""Error: API Access Forbidden (403)
+
+This usually means:
+1. Invalid API key
+2. API key not activated  
+3. Free tier limitations exceeded
+
+Your API key: {api_key[:8]}...{api_key[-4:]}
+
+Please:
+1. Check your API key at https://aviationstack.com/dashboard
+2. Ensure you've verified your email
+3. Check if you have remaining requests this month
+4. Try regenerating your API key"""
+                    )]
+                
                 if response.status != 200:
                     return [types.TextContent(
                         type="text",
-                        text=f"Error: Could not fetch airport data (status: {response.status})"
+                        text=f"Error: Could not fetch airport data (status: {response.status})\nResponse: {response_text[:200]}..."
                     )]
                 
-                airport_data = await response.json()
+                try:
+                    airport_data = await response.json()
+                except Exception as json_error:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Error: Invalid JSON response from API\nResponse: {response_text[:200]}...\nError: {str(json_error)}"
+                    )]
+        
+        # Check if we got valid data
+        if not airport_data or not isinstance(airport_data, dict):
+            return [types.TextContent(
+                type="text",
+                text=f"Error: Invalid response format from AviationStack API\nResponse: {str(airport_data)[:200]}..."
+            )]
         
         # Format the airport response
         result = format_airport_response(airport_data, location)
@@ -535,7 +643,7 @@ async def handle_get_airport_info(arguments: Dict[str, Any]) -> List[types.TextC
     except Exception as e:
         return [types.TextContent(
             type="text",
-            text=f"Error getting airport info for '{location}': {str(e)}"
+            text=f"Error getting airport info for '{location}': {str(e)}\n\nAPI Key status: {'Found' if api_key else 'Missing'}"
         )]
 
 
