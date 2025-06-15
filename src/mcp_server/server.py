@@ -845,4 +845,103 @@ async def read_resource(uri: str) -> str:
             "tools": ["calculator", "text_analyzer", "list_files", "get_weather", "get_flights_by_location", "get_airport_info", "get_location_data"],
             "resources": ["config://server-info", "config://api-setup"],
             "apis_used": [
-                "Open-Meteo (free weather API -
+                "Open-Meteo (free weather API - no key required)",
+                "AviationStack (free tier - API key required)"
+            ],
+            "environment_variables": {
+                "AVIATIONSTACK_API_KEY": "Required for flight data - get free key at https://aviationstack.com/signup/free"
+            }
+        }
+        return json.dumps(server_info, indent=2)
+    elif uri == "config://api-setup":
+        setup_guide = """🔧 API SETUP GUIDE FOR MCP SERVER
+
+📋 REQUIRED APIS:
+
+1. 🌤️ OPEN-METEO (Weather Data)
+   ✅ Status: NO API KEY REQUIRED
+   🌐 Website: https://open-meteo.com/
+   📊 Features: Weather forecasts, current conditions
+   💰 Cost: Completely free
+
+2. ✈️ AVIATIONSTACK (Flight Data)
+   🔑 Status: API KEY REQUIRED
+   🌐 Website: https://aviationstack.com/
+   📊 Free Tier: 1,000 requests/month
+   💰 Cost: Free tier available
+   
+   🔧 SETUP STEPS:
+   1. Go to https://aviationstack.com/signup/free
+   2. Create a free account
+   3. Get your API key from the dashboard
+   4. Set environment variable: AVIATIONSTACK_API_KEY=your_api_key_here
+   
+   🖥️ SETTING ENVIRONMENT VARIABLE:
+   
+   Windows (PowerShell):
+   $env:AVIATIONSTACK_API_KEY="your_api_key_here"
+   
+   Windows (Command Prompt):
+   set AVIATIONSTACK_API_KEY=your_api_key_here
+   
+   Linux/Mac:
+   export AVIATIONSTACK_API_KEY="your_api_key_here"
+   
+   Or add to your .env file:
+   AVIATIONSTACK_API_KEY=your_api_key_here
+
+🚀 USAGE EXAMPLES:
+
+Weather:
+- "Get weather for Oslo"
+- "Get 5-day forecast for New York with hourly data"
+
+Flights:
+- "Get flights near London"
+- "Find flights within 200km of Oslo"
+
+Airports:
+- "Get airport information for JFK"
+- "Find airports near Oslo"
+
+Combined Data:
+- "Get comprehensive location data for Oslo including flights and weather"
+
+🗺️ MAP INTEGRATION:
+All location-based tools return coordinates that can be used for:
+- Interactive maps (Leaflet, Google Maps, MapBox)
+- Flight path visualization
+- Weather overlay mapping
+- Real-time flight tracking displays
+
+📊 FREE TIER LIMITATIONS:
+- AviationStack: 1,000 requests/month
+- Some advanced filtering requires paid plans
+- Rate limiting may apply
+
+💡 TIP: For production applications, consider upgrading to paid tiers for:
+- Higher request limits
+- Advanced location filtering
+- Real-time updates
+- Historical data access
+"""
+        return setup_guide
+    else:
+        raise ValueError(f"Unknown resource: {uri}")
+
+
+async def main():
+    """
+    Main entry point for the MCP server.
+    """
+    # Run the server using stdio transport
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options()
+        )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
